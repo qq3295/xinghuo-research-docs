@@ -1,0 +1,79 @@
+name: Extract text from PDFs
+
+on:
+  push:
+    paths:
+      - '**/*.pdf'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-chi-sim qpdf ghostscript
+          python -m pip install --upgrade pip
+          pip install ocrmypdf
+
+      - name: Determine changed PDFs
+        id: changed
+        run: |
+          set -e
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+          if [ -z "$BEFORE" ]; then
+            # First push or missing 'before': list tracked PDFs
+            CHANGED=$(git ls-files '*.pdf')
+          else
+            CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" -- '*.pdf')
+          fi
+          echo "Changed PDFs:"
+          echo "$CHANGED"
+          {
+            echo "files<<EOF"
+            echo "$CHANGED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Extract text from changed PDFs
+        if: steps.changed.outputs.files != ''
+        run: |
+          mkdir -p texts
+          while IFS= read -r pdf; do
+            [ -z "$pdf" ] && continue
+            base="$(basename "$pdf")"
+            name="${base%.pdf}"
+            out="texts/${name}.txt"
+            echo "Processing $pdf -> $out"
+            # Try pdftotext first
+            pdftotext -layout "$pdf" "$out" || true
+            # If result is too short or empty, fallback to OCR
+            if [ ! -s "$out" ] || [ "$(wc -c < "$out")" -lt 200 ]; then
+              echo "Fallback to OCR for $pdf"
+              ocrmypdf --sidecar "$out" -l chi_sim+eng "$pdf" "texts/${name}_ocr.pdf" || true
+              rm -f "texts/${name}_ocr.pdf"
+            fi
+          done <<< "${{ steps.changed.outputs.files }}"
+
+      - name: Commit extracted text files
+        if: steps.changed.outputs.files != ''
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: extract text from updated PDFs"
+          file_pattern: texts/*.txt
