@@ -1,0 +1,74 @@
+name: Convert DOCX to Markdown and Text
+
+on:
+  push:
+    paths:
+      - '**/*.docx'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  convert-docx:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      - name: Install tools (Pandoc)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc
+
+      - name: Determine changed DOCX files
+        id: changed
+        run: |
+          set -e
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+          if [ -z "$BEFORE" ]; then
+            # First push or missing 'before': list tracked DOCX
+            CHANGED=$(git ls-files '*.docx')
+          else
+            CHANGED=$(git diff --name-only "$BEFORE" "$AFTER" -- '*.docx')
+          fi
+          echo "Changed DOCX files:"
+          echo "$CHANGED"
+          {
+            echo "files<<EOF"
+            echo "$CHANGED"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Convert DOCX to Markdown and Text
+        if: steps.changed.outputs.files != ''
+        run: |
+          mkdir -p docs texts
+          while IFS= read -r docx; do
+            [ -z "$docx" ] && continue
+            base="$(basename "$docx")"
+            name="${base%.docx}"
+            md="docs/${name}.md"
+            txt="texts/${name}.txt"
+            media_dir="docs/media/${name}"
+            echo "Processing $docx -> $md and $txt"
+            mkdir -p "$media_dir"
+            # DOCX -> Markdown (GFM), extract embedded media
+            pandoc -i "$docx" -t gfm -o "$md" --extract-media="$media_dir" || true
+            # DOCX -> Plain Text
+            pandoc -i "$docx" -t plain -o "$txt" || true
+          done <<< "${{ steps.changed.outputs.files }}"
+
+      - name: Commit converted files
+        if: steps.changed.outputs.files != ''
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: convert DOCX to Markdown and plain text"
+          file_pattern: |
+            docs/*.md
+            texts/*.txt
+            docs/media/**
