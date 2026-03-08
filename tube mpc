@@ -1,9 +1,12 @@
 \documentclass{article}
+\usepackage[UTF8]{ctex}
 \usepackage{amsmath, amssymb, amsthm}
 \usepackage{bm}
-\usepackage{optidef}  % 用于优化问题环境
+\usepackage{geometry}
+\geometry{a4paper, margin=1in}
 
-\newtheorem{theorem}{Theorem}
+\newtheorem{theorem}{定理}
+\newtheorem{lemma}{引理}
 \newcommand{\R}{\mathbb{R}}
 \newcommand{\X}{\mathbb{X}}
 \newcommand{\U}{\mathbb{U}}
@@ -16,121 +19,333 @@
 
 \begin{document}
 
-\section*{附录：椭球管状模型预测控制的数学模型}
+\begin{titlepage}
+    \title{实时管状模型预测控制在10状态四旋翼飞行器模型上的应用}
+    \author{Haimin Hu\(^{1}\), Xuhui Feng\(^{1}\), Rien Quirynen\(^{2}\), Mario Eduardo Villanueva\(^{1,*}\), and Boris Houska\(^{1}\)}
+    \date{}
+    \maketitle
+    \begin{abstract}
+        本文讨论了针对非线性输入仿射系统的管状模型预测控制器的实时实现。这是通过将最近关于前向不变管构造的理论和实践进展与非线性MPC的最先进算法（如实时迭代方案）相结合而实现的。本文的重点是以教程风格展示这些思想，并以一个10状态四旋翼飞行器模型为例。该控制器使用ACADO Toolkit的自动代码生成功能实现。数值实验表明，管状MPC方案可以实现毫秒级低位的运行时间。
+    \end{abstract}
+\end{titlepage}
 
-本文基于\cite{Hu2017}整理，针对输入仿射非线性系统提出了一种实时椭球管状模型预测控制（Tube MPC）方案，并通过一个10状态四旋翼模型进行说明。以下为核心数学模型。
+\section{引言}
 
-\subsection{系统描述与不确定模型}
-考虑如下受扰动的非线性系统：
+确定性等价模型预测控制是一种基于优化的现代控制策略，广泛应用于许多工业过程[1, 2, 3]。作为一种反馈控制方案，确定性等价MPC由于其固有的抗干扰能力而表现出一定程度的鲁棒性，这对于安全性要求较低的应用通常已经足够[4]。然而，由于MPC在预测状态轨迹时未考虑不确定性，当出现较大扰动时，约束可能会被违反。
+
+与确定性等价MPC不同，鲁棒MPC能够至少在规定的不确定性范围内为受控系统提供可行性保证[5]。然而，鲁棒MPC的严格公式化需要求解反馈最优控制问题，这通常是难以解决的。近几十年来，出现了一些导致鲁棒MPC问题可处理近似形式的特定公式（见[6, 7, 8]）。其中，管状MPC[9, 10]已成为解决鲁棒MPC控制器综合问题的一种有前途的方法。这种方法采用集合导向的视角，受集合理论和可行性理论[11, 12]的启发。管状MPC的主要思想是用鲁棒前向不变管[13]代替预测的状态轨迹，这些管是集值函数，包含了在给定反馈律下所有可能的状态轨迹，而与不确定性实现无关。
+
+实施MPC控制器时最大的问题之一是获取反馈律所需的计算时间。对于确定性等价MPC，这个问题已被广泛研究（例如[14, 15, 16, 17, 18]）。特别是，将非线性MPC技术与优化的自动生成代码相结合，已被用于合成CPU时间在毫秒和微秒范围内的MPC控制器[19, 20]。尽管确定性等价MPC的实时算法众多，但针对鲁棒MPC的类似算法仅限于线性系统[20]。
+
+本文首次尝试针对输入仿射非线性系统实现管状MPC的实时实现。管状MPC公式通常涉及反馈律的参数化，然后用于构造RFT[9]。这里，我们使用最近提出的基于最小-最大微分不等式的管状MPC公式，该公式将管而非反馈律参数化。该管状MPC控制器的实现基于管横截面的椭球参数化。这导致了一个标准的最优控制问题公式，尽管状态和控制的数量增加了。然后，使用自动生成的实时迭代方案[19]以滚动时域方式求解该最优控制问题，对于具有温和非线性的中等规模问题，该方案能够提供毫秒级的计算性能。椭球管状MPC公式的另一个特点是存在与管相关的非线性反馈控制律。该反馈律用于以更高的采样率控制实际过程。因此，与确定性等价MPC不同，鲁棒MPC是一种在线更新反馈律的分层控制方案。
+
+本文的其余部分组织如下：第二部分介绍了管状MPC的数学公式。第II-B节介绍了用于说明理论的四旋翼飞行器模型。第三部分介绍了椭球管状MPC的可处理重构及其实时实现。第四部分展示了应用于10状态四旋翼飞行器模型的控制器性能结果。最后，第五部分总结了本文。
+
+\textbf{符号说明：}除了标准数学符号外，我们用 \(L_{2}^{n}\) 表示 \(n\) 维勒贝格可积函数的集合，\(W_{1,2}^{n}\) 表示具有平方可积导数的弱可微函数的索伯列夫空间。\(\mathbb{R}^{n}\) 中的紧集和凸紧集分别表示为 \(\mathbb{K}^{n}\) 和 \(\mathbb{K}_{c}^{n}\)。\(n \times n\) 对称半正定和正定矩阵的集合分别表示为 \(\mathbb{S}_{+}^{n}\) 和 \(\mathbb{S}_{++}^{n}\)。中心为 \(q \in \mathbb{R}^{n}\)、形状矩阵为 \(Q \in \mathbb{S}_{+}^{n}\) 的椭球定义为
+\[\mathcal{E}(q,Q) = \left\{q + Q^{\frac{1}{2}}v\left|v^{\top}v\leq 1\right.\right\} ,\]
+其中 \(Q^{\frac{1}{2}}\) 是 \(Q\) 的半正定平方根。矩阵 \(A\) 的第 \(i\) 行记为 \(A_{i}\)。对于矩阵和向量，符号 \(\geq , \leq\) 按分量理解。
+
+\section{问题公式化}
+
+\subsection{管状MPC：数学公式}
+
+我们考虑以下形式的不确定控制系统
 \begin{equation}
-\forall t\in\R:\quad \dot{x}(t) = f(x(t),w(t)) + G u(t) \label{eq:system}
+\forall t\in \mathbb{R}:\dot{x} (t) = f(x(t),w(t)) + Gu(t). \quad (1)
 \end{equation}
-其中 $x:\R\to\R^{n_x}$ 为状态，$u:\R\to\R^{n_u}$ 为控制输入，$w:\R\to\R^{n_w}$ 为外部扰动。系统受如下约束：
-\begin{align}
-x(t) &\in \X := \{ \xi\in\R^{n_x} \mid C^\top \xi \le c \} \label{eq:state_constraint}\\
-u(t) &\in \U \subset \R^{n_u} \quad\text{(紧致凸集)}\\
-w(t) &\in \W := \E(q_w,Q_w) \label{eq:disturbance_ellipsoid}
-\end{align}
-其中 $C\in\R^{n_x\times n_c}$, $c\in\R^{n_c}$，扰动集合取为椭球：$\E(q,Q) = \{ q + Q^{1/2} v \mid v^\top v \le 1\}$，$Q_w\in\Ss_+^{n_w}$。
-
-\subsection{鲁棒前向不变管}
-定义在反馈律 $\mu:\R^{n_x}\to\U$ 作用下，从初始状态 $x_1$ 出发的可达集为 $X(\tau,x_1,\mu)$。称集值函数 $\overline{X}:[0,T]\to\R^{n_x}$ 为系统 \eqref{eq:system} 在 $[0,T]$ 上的一个鲁棒前向不变管（RFIT），如果存在 $\mu$ 使得
+这里，\(x:\mathbb{R}\to \mathbb{R}^{n_{x}}\) 表示状态轨迹，它受多面体硬约束
 \begin{equation}
-\overline{X}(t_2) \supseteq \bigcup_{x_1\in\overline{X}(t_1)} X(t_2-t_1,x_1,\mu),\qquad \forall t_2\ge t_1.
+\forall t\in \mathbb{R}:x(t)\in \mathbb{X}\coloneqq \{\xi \in \mathbb{R}^{n_{x}}|C^{\intercal}\xi \leq c\} \subseteq \mathbb{R}^{n_{x}}, \quad (2)
 \end{equation}
+其中 \(C\in \mathbb{R}^{n_{x}\times n_{c}}\) 和 \(c\in \mathbb{R}^{n_{c}}\)。控制 \(u:\mathbb{R}\to \mathbb{R}^{n_{u}}\) 和外部输入 \(w:\mathbb{R}\to \mathbb{R}^{n_{w}}\) 被认为是有界的，
+\[\forall t\in \mathbb{R}:\quad u(t)\in \mathbb{U}\in \mathbb{R}_{c}^{n_{u}}\quad \mathrm{and}\quad w(t)\in \mathbb{W}\in \mathbb{R}_{c}^{n_{w}}.\]
 
-Tube MPC 的目标是在线求解如下等价优化问题：
-\begin{mini!}{\overline{X}\in\mathcal{X}}{\int_0^T \mathcal{L}(\overline{X}(t))\,dt \label{eq:tube_ocp}}{\label{eq:tube_ocp_label}}{}
-\addConstraint{\overline{X}(t) \subseteq \X,\ \forall t\in[0,T]}
-\addConstraint{\overline{X}(0) = \{\hat{x}_0\}}
-\end{mini!}
-其中 $\mathcal{X}$ 为所有 RFIT 的集合，$\mathcal{L}$ 为定义在集合上的代价函数（例如广义转动惯量）。
+对于给定的反馈律 \(\mu :\mathbb{R}\times \mathbb{R}^{n_{x}}\to \mathbb{U}\) 和给定的初始状态 \(x(0) = x_{0}\in \mathbb{R}^{n_{x}}\)，闭环系统在时间 \(t\) 的可达集由下式给出
+equation[[89, 311, 486, 370]]
 
-\subsection{椭球参数化}
-将管截面限制为椭球：$\overline{X}(t) = \E(q_x(t), Q_x(t))$，其中 $q_x:\R\to\R^{n_x}$ 为中心，$Q_x:\R\to\Ss_+^{n_x}$ 为形状矩阵。
+管状MPC要求在当前时间范围 \([0,T]\) 上滚动时域求解
+\[\begin{array}{rlr}{\inf_{\mu :\mathbb{R}^{n_{x}}\to \mathbb{U}} & {\int_{0}^{T}\mathcal{L}(X(t,\hat{x}_{0},\mu))\mathrm{d}t}\\ {\mathrm{s.t.}} & {X(t,\hat{x}_{0},\mu)\subseteq \mathbb{X},\forall t\in [0,T],} \end{array} \quad (3)\]
+这里，\(\mathcal{L}:K_{C}^{n_{x}}\to \mathbb{R}\) 表示阶段成本，\(\hat{x}_{0}\) 是当前状态测量值。然后，最优输入 \(u(0) = \mu (0,\hat{x}_{0})\) 被发送到过程，直到新的测量值可用。
 
-\begin{theorem}[椭球RFIT的充分条件]\label{thm:ellipsoidal_rfit}
-考虑系统 \eqref{eq:system}，假设 $\W=\E(q_w,Q_w)$，$\U=\{\mathbf{v}\in\R^{n_u}\mid \underline{u}\le \mathbf{v}\le \overline{u}\}$。若存在 Lebesgue 可积函数 $q_x,Q_x,u_x,\lambda,\kappa,K$ 满足：
-\begin{align}
-\dot{q}_x(t) &= f(q_x(t),q_w) + G u_x(t) \label{eq:center_dyn}\\
-\dot{Q}_x(t) &= \Phi\big(q_x(t),Q_x(t),\lambda(t),\kappa(t),K(t)\big) \label{eq:shape_dyn}
-\end{align}
-以及控制约束
-\begin{align}
-u_{x,i}(t) + \sqrt{K_i(t) Q_x(t) K_i(t)^\top} &\le \overline{u}_i,\ i=1,\dots,n_u \label{eq:control_constraint_ub}\\
-u_{x,i}(t) - \sqrt{K_i(t) Q_x(t) K_i(t)^\top} &\ge \underline{u}_i,\ i=1,\dots,n_u \label{eq:control_constraint_lb}
-\end{align}
-则 $\overline{X}:t\mapsto \E(q_x(t),Q_x(t))$ 是系统 \eqref{eq:system} 在 $[0,T]$ 上的一个 RFIT。
+除了最简单的情况外，问题(3)通常是难以处理的。幸运的是，如果我们放宽问题并选择适当的集合参数化，我们可以找到管状MPC的可处理近似形式。这里，我们使用鲁棒前向不变管的概念。我们说一个集值函数 \(\overline{X}:[0,T]\to \mathbb{R}^{n_{x}}\) 是(1)在 \([0,T]\) 上的一个RFIT，如果存在一个反馈 \(\mu :[0,T]\times \mathbb{R}^{n_{x}}\to \mathbb{U}\)，使得
+\[\overline{X} (t_2)\supseteq \bigcup_{x_1\in \overline{X}(t_1)}X(t_2 - t_1,x_1,\mu)\]
+对所有满足 \(t_2\geq t_1\) 的 \(t_1,t_2\in [0,T]\) 成立。因此，(3)等价于
+\[\inf_{\overline{X}\in \mathcal{X}}\int_{0}^{T}\mathcal{L}(\overline{X} (t))\mathrm{d}t\quad \mathrm{s.t.}\left\{ \begin{array}{l}\overline{X} (t)\subseteq \mathbb{X},\forall t\in [0,T]\\ \overline{X} (0) = \{\hat{x}_0\} \end{array} \right., \quad (4)\]
+其中 \(\mathcal{X}\) 表示(1)在 \([0,T]\) 上的所有RFIT的集合。RFIT可以根据不同的目标 \(\mathcal{L}\) 进行选择。一个例子是关于参考 \(x_{\mathrm{ref}}\) 的广义转动惯量，加权矩阵为 \(P\in \mathbb{S}_{+}^{n_{x}}\)：
+\[\mathcal{L}(\overline{X} (t)) = \frac{\int_{\overline{X}(t)}(\xi - x_{\mathrm{ref}})^{\mathrm{T}}P(\xi - x_{\mathrm{ref}})\mathrm{d}\xi}{\int_{\overline{X}(t)}\mathrm{d}\xi}.\]
+
+此时，我们只是将优化反馈律的困难任务转化为在RFIT空间上的优化问题。幸运的是，正如[10]所示，将搜索限制在具有凸像的RFIT上，至少在某些情况下，可以得到可处理的公式。
+
+\subsection{教程：10维四旋翼模型的镇定}
+
+我们考虑一个简化的10维缩放四旋翼模型[21]
+\[\dot{x} (t) = \left( \begin{array}{c}x_{4}(t) + w_{1}(t)\\ x_{5}(t) + w_{2}(t)\\ x_{6}(t) + w_{3}(t)\\ g\tan (x_{7}(t))\\ g\tan (x_{8}(t))\\ -g\\ -d_{1}x_{7}(t) + x_{9}(t)\\ -d_{1}x_{8}(t) + x_{10}(t)\\ -d_{0}x_{3}(t)\\ -d_{0}x_{7}(t) \end{array} \right) + \left( \begin{array}{c}0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0\\ 0 \end{array} \right)u(t). \quad (5)\]
+这里，\((x_{1},x_{2},x_{3})\) 可解释为四旋翼的位置；\((x_{4},x_{5},x_{6})\) 为其速度；\(x_{7}\) 和 \(x_{8}\) 表示俯仰和滚转；\(x_{9}\) 和 \(x_{10}\) 表示俯仰率和滚转率。扰动 \(w_{1},w_{2}\) 和 \(w_{3}\) 表示三个轴向上的风。控制输入 \(u_{1},u_{2}\) 和 \(u_{3}\) 表示可调的俯仰角、滚转角和垂直推力。除上述变量外，\(g\) 表示重力加速度，\(k_{T}\) 是推力系数，\(n_{0}\) 是滚转/俯仰控制增益，\(d_{0},d_{1}\) 是姿态系数。
+
+状态约束集是 \(x_{1}\) 维度上的一堵墙，即 \(\mathcal{X}\coloneqq \{x_{1}|x_{1}\leq \bar{x}_{1}\}\)，其中 \(\bar{x}_{1}\in \mathbb{R}\) 给定。控制约束由 \(\mathbb{U}\coloneqq \{\nu \in \mathbb{R}^{n_{u}}|\underline{u}\leq \nu \leq \overline{u}\}\) 给出，其中 \(\underline{u},\overline{u}\in \mathbb{R}^{n_{u}}\) 给定。扰动信号有界于 \(\mathbb{W}\coloneqq \mathcal{E}(q_{w},Q_{w})\)，其中 \(q_{w} = (0,0,0)^{\intercal}\)，\(Q_{w} = \mathrm{diag}(0.01,0.09,0.25)\)。控制目标是跟踪悬停位置 \(x_{\mathrm{ref}}\)。
+
+\begin{table}[h]
+\centering
+\caption{实例的参数值}
+\begin{tabular}{|l|l|l|}
+\hline
+参数 & 符号 & 值 \\
+\hline
+系数 & d0, d1 & 10, 8 \\
+俯仰/滚转增益 & m0 & 10 \\
+墙的位置 & x1 & 4 \\
+推力系数 & kT & 0.91 \\
+重力常数 & g & 9.8 \\
+悬停状态 & xref & (3,3,10,0,1×7)\(^\top\) \\
+初始状态 & x0 & (0,2,0,1×8)\(^\top\) \\
+加权矩阵 & P & diag(1,1,1,0,1×7) \\
+控制下限 & μ & (-π/2, π/2)\(^\top\) \\
+控制上限 & π & (π/2, π/2)\(^\top\) \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{实时管状MPC}
+
+\subsection{椭球管状MPC}
+
+管状MPC的实际实现基于RFIT的参数化。这里我们关注椭球RFIT \(\overline{X}:t\mapsto \mathcal{E}(q_{x}(t),Q_{x}(t))\)，由中心路径 \(q_{x}:\mathbb{R}\to \mathbb{R}^{n_{x}}\) 和时变形状矩阵 \(Q_{x}:\mathbb{R}\to \mathbb{S}_{+}^{n_{x}}\) 参数化。函数 \(q_{x}\) 和 \(Q_{x}\) 参数化椭球RFIT的充分条件在定理1中给出。
+
+\begin{theorem}
+考虑系统(1)并假设不确定性和控制界分别由 \(\mathbb{W}\coloneqq \mathcal{E}(q_{w},Q_{w})\) 和 \(\mathbb{U}\coloneqq \{\mathbf{v}\in \mathbb{R}^{n_{u}}\mid \underline{u}\leq \mathbf{v}\leq \overline{u}\}\) 给出，其中 \((q_{w},Q_{w})\in \mathbb{R}^{n_{w}}\times \mathbb{S}_{+}^{n_{w}}\) 给定。如果函数 \(q_{x}\) 和 \(Q_{x}\) 满足
+\[\begin{array}{rl} & {\dot{q}_{x}(t) = f(q_{x}(t),q_{w}) + G u_{x}(t)\qquad \forall t\in [0,T]}\\ & {\dot{Q}_{x}(t) = \Phi (q_{x}(t),Q_{x}(t),\lambda (t),\kappa (t),K(t)),\quad \forall t\in [0,T],} \end{array} \quad (6)\]
+对于某些勒贝格可积函数 \(\lambda ,\kappa :[0,T]\to \mathbb{R}_{+ + }\)，\(u_{x}:[0,T]\to \mathbb{U}\) 和 \(K:[0,T]\to \mathbb{R}^{n_{u}\times n_{x}}\)，且满足
+\[\begin{array}{rl} & {u_{x,i}(t) + \sqrt{K_i(t)Q_x(t)K_i(t)^{\top}} \leq \overline{u}_i,\quad i\in \{1,\ldots ,n_u\} ,}\\ & {u_{x,i}(t) - \sqrt{K_i(t)Q_x(t)K_i(t)^{\top}} \geq \underline{u}_i,\quad i\in \{1,\ldots ,n_u\} ,} \end{array} \quad (7)\]
+则 \(\overline{X}:t\mapsto \mathcal{E}(q_{x}(t),Q_{x}(t))\) 是(1)在 \([0,T]\) 上的一个RFIT。
 \end{theorem}
+证明：见[10，定理5]。
 
-其中
-\begin{align}
-A(t) &= \frac{\partial f}{\partial x}(q_x(t),q_w),\quad B(t) = \frac{\partial f}{\partial w}(q_x(t),q_w) \\
-\Phi &= A Q_x + Q_x A^\top \\
-&\quad + \lambda^{-1} Q_x + \lambda B Q_w B^\top \nonumber \\
-&\quad + \kappa^{-1} Q_x + \kappa\, \Omega_n(q_x,Q_x) \nonumber \\
-&\quad - G K Q_x - Q_x K^\top G^\top \label{eq:phi_def}
-\end{align}
-$\Omega_n(q_x,Q_x)$ 是一个非线性边界函数，满足对任意 $(\xi,\omega)\in\E(q_x,Q_x)\times\E(q_w,Q_w)$ 有
-\begin{equation}
-f(\xi,\omega)-f(q_x,q_w)-A(\xi-q_x)-B(\omega-q_w) \in \E(0,\Omega_n(q_x,Q_x)). \label{eq:nonlinear_bounder}
-\end{equation}
+在定理1中，我们引入了简写符号
+\[\begin{array}{rl} & {A(t) = \frac{\partial f}{\partial x} (q_{x}(t),q_{w}),\quad B(t) = \frac{\partial f}{\partial w} (q_{x}(t),q_{w}),\quad \mathrm{and}}\\ & {\Phi (q_{x}(t),Q_{x}(t),\lambda (t),\kappa (t),K(t)) = A(t)Q_{x}(t) + Q_{x}(t)A(t)^{\top}}\\ & {\qquad +\lambda (t)^{-1}Q_{x}(t) + \lambda (t)B(t)Q_{w}B(t)^{\top}}\\ & {\qquad +\kappa (t)^{-1}Q_{x}(t) + \kappa (t)\Omega_{n}(q_{x}(t),Q_{x}(t))}\\ & {\qquad -GK(t)Q_{x}(t) - Q_{x}(t)K(t)^{\top}G^{\top}.} \end{array} \quad (8)\]
 
-\subsection{椭球状态约束}
-椭球 $\E(q_x,Q_x)$ 包含于多面体 $\X$ 当且仅当
-\begin{equation}
-C_i^\top q_x + \sqrt{C_i^\top Q_x C_i} \le c_i,\quad \forall i=1,\dots,n_c. \label{eq:ellipsoid_state_constraint}
-\end{equation}
+非线性边界函数 \(\Omega_{n}:\mathbb{R}^{n_{x}}\times \mathbb{S}_{+}^{n_{x}}\to \mathbb{S}_{+}^{n_{x}}\) 必须满足
+\[\begin{array}{rl} & {f(\xi ,\omega) - f(q_{x}(t),q_{w}) - A(t)(\xi -q_{x}(t))}\\ & {\qquad -B(t)(\omega -q_{w})\in \mathcal{E}(0,\Omega_{n}(q_{x}(t),Q_{x}(t))),} \end{array} \quad (8)\]
+对每一个 \((\xi ,\omega)\in \mathcal{E}(q_{x}(t),Q_{x}(t))\times \mathcal{E}(q_{w},Q_{w})\) 成立。
 
-\subsection{完整的实时椭球管MPC问题}
-在每个采样时刻，给定当前测量 $\hat{x}_0$，求解以下最优控制问题：
-\begin{mini!}{q_x,Q_x,u_x,\lambda,\kappa,K}{\int_0^T \mathcal{L}\big(\E(q_x(\tau),Q_x(\tau))\big)\,d\tau \label{eq:final_ocp}}{}{}
-\addConstraint{\dot{q}_x = f(q_x,q_w) + G u_x,\ \dot{Q}_x = \Phi,\ \forall t\in[0,T]}
-\addConstraint{q_x(0)=\hat{x}_0,\ Q_x(0)=\epsilon I_{n_x}}
-\addConstraint{u_{x,i} \pm \sqrt{K_i Q_x K_i^\top} \le \overline{u}_i,\ \ge \underline{u}_i,\ \forall i}
-\addConstraint{C_i^\top q_x + \sqrt{C_i^\top Q_x C_i} \le c_i,\ \forall i}
-\addConstraint{\lambda(t)>0,\ \kappa(t)>0,\ Q_x(t)\succeq 0}
-\addConstraint{\underline{u} \le u_x(t) \le \overline{u},\ \forall t\in[0,T]}
-\end{mini!}
-代价函数取为广义转动惯量：
-\begin{equation}
-\mathcal{L}\big(\E(q_x,Q_x)\big) = (q_x - x_{\text{ref}})^\top P (q_x - x_{\text{ref}}) + \frac{\Tr(P Q_x)}{n_x+2}. \label{eq:cost}
-\end{equation}
+从管状MPC的角度来看，可以通过求解关于 \(q_{x},Q_{x},u_{x},\lambda ,\kappa\) 和 \(K\) 的非线性OCP来构造椭球RFIT，其初始条件为
+\[q_{x}(0) = \hat{x}_{0}\quad \mathrm{and}\quad Q_{x}(0) = \epsilon I_{n_{x}}\in \mathbb{R}^{n_{x}\times n_{x}}, \quad (9)\]
+其中 \(\epsilon >0\) 是一个小量。
 
-\subsection{显式反馈律}
-由 RFIT 可导出一个显式的边界反馈律 $\mu$，用于下层高速控制回路：
-\begin{equation}
-\mu(\tau,x(\tau)) = 
-\begin{cases}
-u_x(\tau), & \text{if } x(\tau)=q_x(\tau) \\[4pt]
-u_x(\tau) - \dfrac{(K(\tau)Q_x(\tau)K(\tau)^\top) G^\top d(x(\tau))}{\big\| Q_x(\tau)^{\frac12} K(\tau)^\top G^\top d(x(\tau)) \big\|_2}, & \text{otherwise}
-\end{cases} \label{eq:feedback_law}
-\end{equation}
-其中 $d(x(\tau)) = \dfrac{Q_x(\tau)^\dagger (x(\tau)-q_x(\tau))}{\| Q_x(\tau)^\dagger (x(\tau)-q_x(\tau)) \|_2}$，$(\cdot)^\dagger$ 表示 Moore–Penrose 伪逆。
+椭球管状MPC的最后一个要素是为椭球管参数化公式化约束 \(\overline{X} (t)\subseteq \mathbb{X}\)。在我们的设定中，约束 \(\forall t\in [0,T]:\) \(\mathcal{E}(q_{x}(t),Q_{x}(t))\subseteq \mathbb{X}\) 成立当且仅当
+\[\forall t\in [0,T],\forall i\in \{1,\ldots ,n_{c}\} : \quad (10)\]
 
-\subsection{实例：10状态四旋翼模型的非线性边界函数}
-对于文中的四旋翼模型（见式(5)），非线性项出现在 $g\tan(x_7)$ 和 $g\tan(x_8)$。Lemma 1 给出了 $\Omega_n$ 的解析构造：
-\begin{equation}
-\Omega_{n_{(i,j)}}(q,Q) = 
-\begin{cases}
-\omega\!\left(q_j,\sqrt{Q_{(j,j)}}\right)^2, & \text{if } (i,j) = (4,7) \text{ or } (5,8) \\
-0, & \text{otherwise}
-\end{cases} \label{eq:omega_quad}
-\end{equation}
-其中
-\begin{equation}
-\omega(q_j,\Delta_j) = \frac{g}{\cos^2(q_j)} \frac{\tan(\Delta_j) - \Delta_j + \Delta_j \tan(|q_j|)\tan(\Delta_j)}{1 - \tan(|q_j|)\tan(\Delta_j)}. \label{eq:omega_def}
-\end{equation}
+现在，椭球管状MPC控制器需要在滚动时域上求解
+\[\underset {q_{x},Q_{x},u_{x}}{\inf}\int_{0}^{T}\mathcal{L}(\mathcal{E}(q_{x}(\tau),Q_{x}(\tau))\mathrm{d}\tau\] \[\qquad \mathrm{s.t.}\left\{ \begin{array}{l l}{\mathrm{ODE}(6)\mathrm{~具有初始条件~}(9)}\\ {\mathrm{状态约束~}(10)\mathrm{~和不等式~}(7)}\\ {\lambda (t),\kappa (t) > 0,\mathcal{Q}_{x}(t)\in \mathbb{S}_{+}^{n_{x}}\forall t\in [0,T]}\\ {\underline{u}\leq u_{x}(t)\leq \overline{u},\qquad \forall t\in [0,T],} \end{array} \right. \quad (11)\]
+管的椭球截面的广义转动惯量由下式给出
+\[\begin{array}{rl} & {\mathcal{L}(\mathcal{E}(q_{x}(t),Q_{x}(t))) = (q_{x}(t) - x_{\mathrm{ref}})^{\top}P(q_{x}(t) - x_{\mathrm{ref}})}\\ & {\qquad +\frac{\mathrm{Tr}(PQ_{x}(t))}{n_{x} + 2}.} \end{array} \quad (12)\]
 
-\subsection{分层控制架构}
+\subsection{教程：设置最优控制问题}
+
+本节讨论关于构建椭球管状MPC的可处理实现的细节。OCP(11)需要中心路径的 \(n_{x}\) 个状态和形状矩阵的 \((n_{x}^{2}+n_{x}) / 2\) 个状态（由于对称性），总共65个状态。同样，控制的数量增加到 \(2 + n_{u} + n_{u}\times n_{x} = 35\)（\(\lambda ,\kappa ,u_{x},\) 和 \(K\)）。除了(6)之外，定义问题(11)的约束是直接的，因为需要构造一个非线性边界函数。这种构造可以自动完成[10]，也可以使用(8)解析完成（见[22]）。引理1为10维四旋翼模型(5)提供了一个显式的非线性边界函数。
+
+\begin{lemma}
+函数 \(\Omega_{n}:\mathbb{R}^{10}\times \mathbb{S}_{+}^{10}\to \mathbb{S}_{+}^{10}\) 定义为
+\[\Omega_{n_{(i,j)}}(q,Q) = \left\{ \begin{array}{ll}\omega \left(q_{j},\sqrt{Q_{(j,j)}}\right)^{2} & \text{如果 }(i,j) = (4,7),(5,8)\\ 0 & \text{否则} \end{array} \right.\]
+对于每个 \(i,j\in \{1,\ldots ,10\}\)，其中
+\[\omega (q_{j},\Delta_{j}) = \frac{g}{\cos^{2}(q_{j})}\frac{\tan(\Delta_{j}) - \Delta_{j} + \Delta_{j}\tan(|q_{j}|)\tan(\Delta_{j})}{1 - \tan(|q_{j}|)\tan(\Delta_{j})}\]
+是方程(5)在(8)意义下的一个非线性边界函数。
+\end{lemma}
+\begin{proof}
+(5)中的非线性具有形式 \(f_{i}(\xi ,\omega) = g\tan (\xi_{j})\)，其中 \((i,j) = (4,7),(5,8)\)。因此，非线性在除第四和第五对角线元素之外的所有地方都为零。设 \(\delta_{j} = \xi_{j} - q_{j}\)，\(f_{i}\) 在 \(q_{j}\) 处的一阶展开的误差由下式给出
+\[n_{i}(q_{j},\delta_{j}) = g\left[\tan (q_{j} + \delta_{j}) - \tan (q_{j}) - \frac{\delta_{j}}{\cos^{2}(q_{j})}\right].\]
+使用加法公式
+\[\tan (q_{j} + \delta_{j}) = \frac{\tan(q_{j}) + \tan(\delta_{j})}{1 - \tan(q_{j})\tan(\delta_{j})},\]
+得到
+\[\begin{array}{rl} & {n_{i}(q_{j},\delta_{j}) = \frac{g}{\cos^{2}(q_{j})}\left|\frac{\tan(\delta_{j}) - \delta_{j} + \delta_{j}\tan(q_{j})\tan(\delta_{j})}{1 - \tan(q_{j})\tan(\delta_{j})}\right|}\\ & {\qquad \leq \frac{g}{\cos^{2}(q_{j})}\frac{\tan(\Delta_{j}) - \Delta_{j} + \Delta_{j}\tan(|q_{j}|)\tan(\Delta_{j})}{1 - \tan(|q_{j}|)\tan(\Delta_{j})},}\\ & {\qquad = \omega (q_{j},\Delta_{j})} \end{array} \quad (10)\]
+这对所有 \(\delta_{j}\in [- \Delta_{j},\Delta_{j}]\) 成立。在上述不等式中令 \(\Delta_{j} = \sqrt{Q_{(j,j)}}\) 即证得本引理。
+\end{proof}
+
+一旦定义了 \(\Omega_{n}\)，下一步就是显式地写出(11)中剩余的约束。
+
+\subsection{椭球管状MPC的实用方面}
+
+在本节中，我们将讨论椭球管状MPC的实时实现。就像在确定性等价MPC中一样，确保递归可行性很重要，即在每个时刻和每个初始条件下都能找到可行的状态轨迹。这个问题已在[10]中讨论过，其中建议围绕参考轨迹构造一个椭球前向不变集 \(\mathcal{E}(x_{\mathrm{ref}},Q_{\mathrm{ref}})\)，并在(11)中对每个 \(t \in [0,T]\) 施加约束 \(\mathcal{E}(q_x(t),Q_x(t)) \subseteq \mathcal{E}(x_{\mathrm{ref}},Q_{\mathrm{ref}})\)。原则上，这样的集合可以通过求解以下问题来构造
+\[\begin{array}{rl}
+\inf_{Q_{\mathrm{ref}}, u_{\mathrm{ref}}, \lambda_{\mathrm{ref}}, \kappa_{\mathrm{ref}}, K_{\mathrm{ref}}} & \Tr(Q_{\mathrm{ref}}) \\
+\mathrm{s.t.} & 0 \succeq \Phi(x_{\mathrm{ref}}, Q_{\mathrm{ref}}, \lambda_{\mathrm{ref}}, \kappa_{\mathrm{ref}}, K_{\mathrm{ref}}), \\
+& Q_{\mathrm{ref}} \in \mathbb{S}_{++}^{n_x}, \\
+& \underline{u} \leq u_{\mathrm{ref}} \leq \overline{u}, \\
+& \lambda_{\mathrm{ref}}, \kappa_{\mathrm{ref}} > 0, \\
+& \underline{K} \leq K_{\mathrm{ref}} \leq \overline{K}, \\
+& \overline{u}_i \geq u_{\mathrm{ref}i} + \sqrt{K_{\mathrm{ref}i} Q_{\mathrm{ref}} K_{\mathrm{ref}i}^{\top}}, \quad \forall i \in \{1,\dots,n_u\} \\
+& \underline{u}_i \leq u_{\mathrm{ref}i} - \sqrt{K_{\mathrm{ref}i} Q_{\mathrm{ref}} K_{\mathrm{ref}i}^{\top}}, \quad \forall i \in \{1,\dots,n_u\}.
+\end{array}\]
+
+闭环稳定性是实施MPC控制器时必须考虑的另一个重要方面。确保有限时域非线性MPC方案的稳定性，除其他条件外，需要跟踪（二次）阶段成本[23, 1, 24]。不幸的是，所选阶段成本中的迹项阻止了将非线性跟踪MPC稳定性分析技术应用于管状MPC方案。相反，管状MPC方案的严格稳定性分析需要使用经济MPC领域的分析技术[25, 26]，但这超出了本文的范围。
+
+\subsection{椭球管状MPC的初始化过程}
+
+所提出的椭球管状MPC方案基于求解一个标准的非凸非线性最优控制问题。然而，它比确定性等价对应物更昂贵。状态数量增加了 \((n_x + n_x^2)/2\)，而控制数量增加到 \(2 + n_u + n_u n_x\)。与状态不同，这些控制没有物理意义。这使得为基于梯度的求解器找到良好的初始猜测成为一项具有挑战性的任务。文献[27]中提出了计算 \(\lambda\)、\(\kappa\) 和 \(K\) 的启发式方法：
+\[\lambda(t) = \sqrt{\frac{\Tr(Q_x(t))}{\Tr(B(t)Q_w B(t)^{\top})}},\]
+\[\kappa(t) = \sqrt{\frac{\Tr(Q_x(t))}{\Tr(\Omega_n(q_x(t),Q_x(t)))}},\]
+以及
+\[K(t) = \alpha(t) \tilde{K}(t).\]
+这里，反馈增益 \(\tilde{K}(t) = G^{\top} P(t)\)，其中 \(P(t) \in \mathbb{S}_{+}^{n_x}\) 是以下扰动Riccati代数方程的解：
+\[\tilde{A}(t) P(t) + P(t) \tilde{A}(t)^{\top} - P(t) G G^{\top} P(t) + I = 0\]
+其中 \(\tilde{A}(t) = A(t) + \left(\frac{1}{\kappa(t)} + \frac{1}{\lambda(t)}\right) I\)。因子
+\[\alpha(t) = \min_i \left\{ \frac{\overline{u}_i - u_{x,i}(t)}{\sqrt{\tilde{K}_i(t) Q_x(t) \tilde{K}_i(t)^{\top}}}, \frac{u_{x,i}(t) - \underline{u}_i}{\sqrt{\tilde{K}_i(t) Q_x(t) \tilde{K}_i(t)^{\top}}} \right\}\]
+用于缩放反馈以满足控制界。现在，通过仅优化函数 \(u_x\)，可以计算出一个有效但次优的RFIT。这个次优RFIT用作(11)的初始猜测。
+
+\subsection{实时管状MPC的分层控制器}
+
+图1展示了一个两层分层鲁棒控制器设计。在较低频率层，管状MPC问题(11)在每次测量到达时求解一次。然后将管的状态和控制发送到反馈模块，在那里评估显式反馈律。该反馈律用作较低层控制器，以更快的采样率提供控制信号。在下一个采样时刻，反馈律在高层控制器中更新。
+
 \begin{figure}[h]
 \centering
-\caption{双层控制回路：上层以毫秒级周期求解 Tube MPC 问题，更新反馈律 $\mu$；下层以微秒级周期执行显式反馈律 $\mu$，实现对过程的快速鲁棒控制。}
-\label{fig:hierarchy}
+\begin{tabular}{c}
+管状MPC (11) \\
+\(q_x, Q_x, u_x, K\) \\
+\(\hat{x}_t\) \\
+采样时间在毫秒范围 \\
+高层 \\
+\hline
+\(u(t) = \mu(t, \hat{x}_t)\) \\
+\(\hat{x}_t\) \\
+采样时间在微秒范围 \\
+\(\mu\) \\
+低层 \\
+过程 \\
+\end{tabular}
+\caption{椭球管状MPC的双层控制回路。椭球管状MPC用于更新显式反馈律 \(\mu\)。该反馈律具有鲁棒性，可用于在微秒范围内提供控制信号。}
 \end{figure}
 
-\begin{thebibliography}{1}
-\bibitem{Hu2017} H. Hu, X. Feng, R. Quirynen, M. E. Villanueva, and B. Houska, ``Real-Time Tube MPC Applied to a 10-State Quadrotor Model,'' \emph{Submitted to IEEE Conference on Decision and Control}, 2017.
+本文提出的管状MPC公式还提供了一种在实时中实现反馈律的自然方式。回想一下，每个RFIT至少由一个反馈律诱导，如果显式知道，该反馈律可以用于以更高的采样率提供反馈。使用椭球RFIT的自然边界反馈律[10]：
+\[\mu(\tau,x(\tau)) =
+\begin{cases}
+u_x(\tau), & \text{如果 } x(\tau) = q_x(\tau) \\[4pt]
+u_x(\tau) - \dfrac{(K(\tau) Q_x(\tau) K(\tau)^{\top}) G^{\top} d(x(\tau))}{\left\| Q_x(\tau)^{\frac{1}{2}} K(\tau)^{\top} G^{\top} d(x(\tau)) \right\|_2}, & \text{否则}
+\end{cases}\]
+其中
+\[d(x(\tau)) = \frac{Q_x(\tau)^{\dagger} (x(\tau) - q_x(\tau))}{\| Q_x(\tau)^{\dagger} (x(\tau) - q_x(\tau)) \|_2},\]
+\((\cdot)^{\dagger}\) 表示Moore-Penrose伪逆。
+
+实施MPC控制器时最大的问题之一是每个采样时刻求解非线性OCP所需的计算时间。如今，可以为实时非线性MPC定制实现自动生成。例如，用于自动生成RTI方案的工具可以在[19]中找到。该RTI方案使用多重打靶法离散化OCP，并利用优化问题序列相邻的事实。这通过初始值嵌入策略[28]用于后续问题的初始化，允许每个优化问题只进行一次迭代。该方案的另一个优点是将每个采样时间分为一个短的反馈阶段和一个较长的阶段，在该阶段中，在不了解下一状态的情况下尽可能多地准备下一个反馈。通过使用自动代码生成工具[19]，可以进一步减少该RTI方案的计算时间。
+
+\section{数值结果}
+
+在本节中，我们通过将椭球管状MPC应用于第II-B节中的四旋翼镇定问题来说明其性能。本节中介绍的所有数值实验均使用ACADO Toolkit[29]实现。特别地，我们通过其MATLAB接口使用自动代码生成模块导出RTI方案。导出的求解器使用带有四阶Runge-Kutta积分器的多重打靶法。QP子问题使用qpOASES[30]中实现的在线有效集策略求解。代码使用GNU编译器套件4.8版编译。所有结果均在装有1.7 GHz处理器和8GB RAM（1600 MHz）的Ubuntu 14.04 LTS操作系统上获得。
+
+\subsection{闭环性能：确定性等价MPC}
+
+图2显示了有无不确定性情况下确定性等价MPC控制器的闭环性能。控制器使用预测时域 \(T = 1.2\mathrm{s}\)，总共6个打靶区间和18个Runge-Kutta积分步。名义闭环场景使用椭球不确定界中心 \(q_w\) 获得。对于受扰轨迹，动态系统在均匀分布的过程噪声下进行仿真。正如预期，名义条件下的确定性等价MPC控制器（蓝色）能够将四旋翼驱动到期望位置，同时避开墙。另一方面，当受到扰动时，系统违反约束（红色轨迹）。每个RTI的平均计算时间为 \(159\mu \mathrm{s}\)。
+
+\begin{figure}[h]
+\centering
+Fig. 2. 确定性等价MPC的闭环性能。名义轨迹和受扰轨迹分别以蓝色和红色显示。可以在 \((x_{1},t)\) 平面上观察到约束违反（大约在 \(t = 3\mathrm{s}\)）。
+\end{figure}
+
+\subsection{闭环性能：椭球管状MPC}
+
+椭球管状MPC控制器按照第III节中描述的程序设置。为了给求解器提供良好的初始猜测，求解了一个简化的椭球管最优控制问题。简化问题按(11)公式化，但根据[27]（见第III-D节）设置 \(\lambda ,\kappa\) 和 \(K\)，并且仅优化控制输入 \(u_x\)，该输入使用名义确定性等价控制器的控制输入进行初始化。图3显示了次优椭球RFIT在 \((t,x_{1},x_{3})\) 空间上的投影。
+
+\begin{figure}[h]
+\centering
+Fig. 3. 从初始化过程获得的次优椭球RFIT。中心路径和管截面以红色显示。
+\end{figure}
+
+获得次优椭球RFIT后，在闭环中实现管状MPC控制器。控制器使用预测时域 \(T = 0.6\mathrm{s}\)，分为3个打靶区间，并使用9个积分步离散化。图4显示了闭环控制器的管在 \((t,x_{1},x_{3})\) 空间上的投影，以及受扰轨迹。控制器能够将系统转向参考位置，同时避免违反约束。
+
+\begin{figure}[h]
+\centering
+Fig. 4. 椭球管状MPC的闭环性能。闭环轨迹显示为红色线条和红色阴影区域。
+\end{figure}
+
+管状MPC控制器的平均计算时间为每RTI \(81.6\mathrm{ms}\)。鉴于这个时间，快速回路仅以 \(20\mu \mathrm{s}\) 的采样时间实现。表II显示了每个RTI的平均计算时间按最耗时阶段的分解。不出所料，大部分时间花在积分和灵敏度生成上。
+
+\begin{table}[h]
+\centering
+\caption{管状MPC自动生成方案的运行时间性能}
+\begin{tabular}{|l|c|c|}
+\hline
+高层 & CPU时间 & 百分比 \\
+\hline
+积分与灵敏度 & 77.3ms & 95\% \\
+缩聚 & 3.6ms & 4\% \\
+QP求解（使用qpOASES） & 0.6ms & 1\% \\
+一个完整的RTI & 81.6ms & 100\% \\
+\hline
+低层 & CPU时间 & 百分比 \\
+\hline
+显式反馈评估 μ & 20μs & 100\% \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{结论}
+
+本文介绍了针对10状态四旋翼飞行器模型的管状MPC的实时实现。该管状MPC方案使用具有椭球截面的RFT。这种参数化允许通过求解标准最优控制问题来计算管，尽管与原始确定性等价MPC公式相比规模有所增加。特别是，椭球管状MPC问题需要 \((n_{x}^{2} + n_{x}) / 2\) 个额外状态，\(n_{x}n_{u}\) 个控制，\(2n_{x}n_{u}\) 个混合状态和控制的额外非线性约束以及2个界约束。椭球管状MPC问题使用自动生成的RTI方案求解。然后，该控制器作为分层控制器实现，其中管状MPC问题用于更新与椭球管相关的显式反馈律，该反馈律又用于以更高的采样率控制过程。基于简化的10状态非线性四旋翼飞行器模型跟踪悬停位置的计算实验表明，管状MPC控制器可以在毫秒（微秒）范围内实现MPC回路。
+
+\section*{致谢}
+
+本研究得到了中国国家自然科学基金（NSFC），项目号61473185，以及上海科技大学，项目号F-0203-14-012的支持。此外，我们感谢Mo Chen博士提供10状态四旋翼飞行器模型。
+
+\begin{thebibliography}{99}
+
+\bibitem{1} J. Q. Rawlings and D. Q. Mayne, \emph{Viability theory}. Systems \& Control: Foundations \& Applications. Birkhäuser Boston, Inc., Boston, MA., 1991.
+
+\bibitem{2} C. E. Garcia, D. M. Prett, and M. Morari, "Model predictive control: theory and practice survey," \emph{Automatica}, vol. 25, no. 3, pp. 335-348, 1989.
+
+\bibitem{3} F. Allgower and A. Zheng, \emph{Nonlinear model predictive control}. Birkhäuser, 2012, vol. 26.
+
+\bibitem{4} G. Pannocchia, J. B. Rawlings, and S. J. Wright, "Conditions under which suboptimal nonlinear mpc is inherently robust," \emph{Systems \& Control Letters}, vol. 60, no. 9, pp. 747-755, 2011.
+
+\bibitem{5} A. Bemporad and M. Morari, "Robust model predictive control: A survey," \emph{Robustness in identification and control}, pp. 207-226, 1999.
+
+\bibitem{6} M. V. Kothare, V. Balakrishnan, and M. Morari, "Robust constrained model predictive control using linear matrix inequalities," \emph{Automatica}, vol. 32, no. 10, pp. 1361-1379, 1996.
+
+\bibitem{7} D. Q. Mayne, S. V. Raković, R. Findeisen, and F. Allgower, "Robust output feedback model predictive control of constrained linear systems: Time varying case," \emph{Automatica}, vol. 45, no. 9, pp. 2082-2087, 2009.
+
+\bibitem{8} S. Yu, M. Reble, H. Chen, and F. Allgower, "Inherent robustness properties of quasi-infinite horizon nonlinear model predictive control," \emph{Automatica}, vol. 50, no. 9, pp. 2269-2280, 2014.
+
+\bibitem{9} S. V. Raković, B. Kouvaritakis, M. Cannon, C. Panos, and R. Findeisen, "Parameterized tube model predictive control," \emph{IEEE Transactions on Automatic Control}, vol. 57, no. 11, pp. 2746-2761, 2012.
+
+\bibitem{10} M. E. Villanueva, R. Quirynen, M. Diehl, B. Chachuat, and B. Houska, "Robust mpc via min-max differential inequalities," \emph{Automatica}, vol. 77, pp. 311-321, 2017.
+
+\bibitem{11} F. Blanchini, "Set invariance in control," \emph{Automatica}, vol. 35, no. 11, pp. 1747-1767, 1999.
+
+\bibitem{12} J. P. Aubin, \emph{Viability theory}. Systems \& Control: Foundations \& Applications. Birkhäuser Boston, Inc., Boston, MA., 1991.
+
+\bibitem{13} W. Langson, I. Chryssochos, S. V. Raković, and D. Q. Mayne, "Robust model predictive control using tubes," \emph{Automatica}, vol. 40, no. 1, pp. 125-133, 2004.
+
+\bibitem{14} M. Diehl, H. G. Bock, J. P. Schlöder, R. Findeisen, Z. Nagy, and F. Allgower, "Real-time optimization and nonlinear model predictive control of processes governed by differential-algebraic equations," \emph{Journal of Process Control}, vol. 12, no. 4, pp. 577-585, 2002.
+
+\bibitem{15} R. Milman and E. J. Davison, "A fast mpc algorithm using nonfeasible active set methods," \emph{Journal of optimization theory and applications}, vol. 139, no. 3, pp. 591-616, 2008.
+
+\bibitem{16} Y. Wang and S. Boyd, "Fast model predictive control using online optimization," \emph{IEEE Transactions on Control Systems Technology}, vol. 18, no. 2, pp. 267-278, 2010.
+
+\bibitem{17} V. M. Zavala and L. T. Biegler, "The advanced-step nmpc controller: Optimality, stability and robustness," \emph{Automatica}, vol. 45, no. 1, pp. 86-93, 2009.
+
+\bibitem{18} T. Ohtsuka, "A continuation/gmres method for fast computation of nonlinear receding horizon control," \emph{Automatica}, vol. 40, no. 4, pp. 563-574, 2004.
+
+\bibitem{19} B. Houska, H. J. Ferreau, and M. Diehl, "An auto-generated real-time iteration algorithm for nonlinear mpc in the microsecond range," \emph{Automatica}, vol. 47, no. 10, pp. 2279-2285, 2011.
+
+\bibitem{20} M. N. Zeilinger, D. M. Raimondo, A. Domahidi, M. Morari, and C. N. Jones, "On real-time robust model predictive control," \emph{Automatica}, vol. 50, no. 3, pp. 683-694, 2014.
+
+\bibitem{21} P. Bouffard, "On-board model predictive control of a quadrotor helicopter: Design, implementation, and experiments," Department of Computer Science, University of California Berkeley, Tech. Rep., 2012.
+
+\bibitem{22} B. Houska, F. Logist, J. Van Impe, and M. Diehl, "Robust optimization of nonlinear dynamic systems with application to a jacketed tubular reactor," \emph{Journal of Process Control}, vol. 22, no. 6, pp. 1152-1160, 2012.
+
+\bibitem{23} H. Chen and F. Allgower, "A quasi-infinite horizon nonlinear model predictive control scheme with guaranteed stability," \emph{Automatica}, vol. 34, no. 10, pp. 1205-1217, 1998.
+
+\bibitem{24} D. Q. Mayne, J. B. Rawlings, C. V. Rao, and P. O. Scokaert, "Constrained model predictive control: Stability and optimality," \emph{Automatica}, vol. 36, no. 6, pp. 789-814, 2000.
+
+\bibitem{25} R. Amrit, J. B. Rawlings, and D. Angeli, "Economic optimization using model predictive control with a terminal cost," \emph{Annual Reviews in Control}, vol. 35, no. 2, pp. 178-186, 2011.
+
+\bibitem{26} L. Grune, "Economic receding horizon control without terminal constraints," \emph{Automatica}, vol. 49, no. 3, pp. 725-734, 2013.
+
+\bibitem{27} M. E. Villanueva, J. C. Li, X. Feng, B. Chachuat, and B. Houska, "Computing ellipsoidal robust forward invariant tubes for nonlinear mpc," in \emph{In Proceedings of the 20th IFAC World Congress}, Toulouse, France, 2017, pp. 7436-7441.
+
+\bibitem{28} M. Diehl, "Real-time optimization for large scale nonlinear processes," Ph.D. dissertation, Universität Heidelberg, 2001.
+
+\bibitem{29} B. Houska, H. J. Ferreau, and M. Diehl, "Acado toolkit—an open-source framework for automatic control and dynamic optimization," \emph{Optimal Control Applications and Methods}, vol. 32, no. 3, pp. 298-312, 2011.
+
+\bibitem{30} H. Ferreau, C. Kirches, A. Potschka, H. Bock, and M. Diehl, "qpOASES: A parametric active-set algorithm for quadratic programming," \emph{Mathematical Programming Computation}, vol. 6, no. 4, pp. 327-363, 2014.
+
 \end{thebibliography}
 
 \end{document}
