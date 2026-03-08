@@ -1,0 +1,136 @@
+\documentclass{article}
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{bm}
+\usepackage{optidef}  % 用于优化问题环境
+
+\newtheorem{theorem}{Theorem}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\X}{\mathbb{X}}
+\newcommand{\U}{\mathbb{U}}
+\newcommand{\W}{\mathbb{W}}
+\newcommand{\E}{\mathcal{E}}
+\newcommand{\K}{\mathbb{K}}
+\newcommand{\Ss}{\mathbb{S}}
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\diag}{\operatorname{diag}}
+
+\begin{document}
+
+\section*{附录：椭球管状模型预测控制的数学模型}
+
+本文基于\cite{Hu2017}整理，针对输入仿射非线性系统提出了一种实时椭球管状模型预测控制（Tube MPC）方案，并通过一个10状态四旋翼模型进行说明。以下为核心数学模型。
+
+\subsection{系统描述与不确定模型}
+考虑如下受扰动的非线性系统：
+\begin{equation}
+\forall t\in\R:\quad \dot{x}(t) = f(x(t),w(t)) + G u(t) \label{eq:system}
+\end{equation}
+其中 $x:\R\to\R^{n_x}$ 为状态，$u:\R\to\R^{n_u}$ 为控制输入，$w:\R\to\R^{n_w}$ 为外部扰动。系统受如下约束：
+\begin{align}
+x(t) &\in \X := \{ \xi\in\R^{n_x} \mid C^\top \xi \le c \} \label{eq:state_constraint}\\
+u(t) &\in \U \subset \R^{n_u} \quad\text{(紧致凸集)}\\
+w(t) &\in \W := \E(q_w,Q_w) \label{eq:disturbance_ellipsoid}
+\end{align}
+其中 $C\in\R^{n_x\times n_c}$, $c\in\R^{n_c}$，扰动集合取为椭球：$\E(q,Q) = \{ q + Q^{1/2} v \mid v^\top v \le 1\}$，$Q_w\in\Ss_+^{n_w}$。
+
+\subsection{鲁棒前向不变管}
+定义在反馈律 $\mu:\R^{n_x}\to\U$ 作用下，从初始状态 $x_1$ 出发的可达集为 $X(\tau,x_1,\mu)$。称集值函数 $\overline{X}:[0,T]\to\R^{n_x}$ 为系统 \eqref{eq:system} 在 $[0,T]$ 上的一个鲁棒前向不变管（RFIT），如果存在 $\mu$ 使得
+\begin{equation}
+\overline{X}(t_2) \supseteq \bigcup_{x_1\in\overline{X}(t_1)} X(t_2-t_1,x_1,\mu),\qquad \forall t_2\ge t_1.
+\end{equation}
+
+Tube MPC 的目标是在线求解如下等价优化问题：
+\begin{mini!}{\overline{X}\in\mathcal{X}}{\int_0^T \mathcal{L}(\overline{X}(t))\,dt \label{eq:tube_ocp}}{\label{eq:tube_ocp_label}}{}
+\addConstraint{\overline{X}(t) \subseteq \X,\ \forall t\in[0,T]}
+\addConstraint{\overline{X}(0) = \{\hat{x}_0\}}
+\end{mini!}
+其中 $\mathcal{X}$ 为所有 RFIT 的集合，$\mathcal{L}$ 为定义在集合上的代价函数（例如广义转动惯量）。
+
+\subsection{椭球参数化}
+将管截面限制为椭球：$\overline{X}(t) = \E(q_x(t), Q_x(t))$，其中 $q_x:\R\to\R^{n_x}$ 为中心，$Q_x:\R\to\Ss_+^{n_x}$ 为形状矩阵。
+
+\begin{theorem}[椭球RFIT的充分条件]\label{thm:ellipsoidal_rfit}
+考虑系统 \eqref{eq:system}，假设 $\W=\E(q_w,Q_w)$，$\U=\{\mathbf{v}\in\R^{n_u}\mid \underline{u}\le \mathbf{v}\le \overline{u}\}$。若存在 Lebesgue 可积函数 $q_x,Q_x,u_x,\lambda,\kappa,K$ 满足：
+\begin{align}
+\dot{q}_x(t) &= f(q_x(t),q_w) + G u_x(t) \label{eq:center_dyn}\\
+\dot{Q}_x(t) &= \Phi\big(q_x(t),Q_x(t),\lambda(t),\kappa(t),K(t)\big) \label{eq:shape_dyn}
+\end{align}
+以及控制约束
+\begin{align}
+u_{x,i}(t) + \sqrt{K_i(t) Q_x(t) K_i(t)^\top} &\le \overline{u}_i,\ i=1,\dots,n_u \label{eq:control_constraint_ub}\\
+u_{x,i}(t) - \sqrt{K_i(t) Q_x(t) K_i(t)^\top} &\ge \underline{u}_i,\ i=1,\dots,n_u \label{eq:control_constraint_lb}
+\end{align}
+则 $\overline{X}:t\mapsto \E(q_x(t),Q_x(t))$ 是系统 \eqref{eq:system} 在 $[0,T]$ 上的一个 RFIT。
+\end{theorem}
+
+其中
+\begin{align}
+A(t) &= \frac{\partial f}{\partial x}(q_x(t),q_w),\quad B(t) = \frac{\partial f}{\partial w}(q_x(t),q_w) \\
+\Phi &= A Q_x + Q_x A^\top \\
+&\quad + \lambda^{-1} Q_x + \lambda B Q_w B^\top \nonumber \\
+&\quad + \kappa^{-1} Q_x + \kappa\, \Omega_n(q_x,Q_x) \nonumber \\
+&\quad - G K Q_x - Q_x K^\top G^\top \label{eq:phi_def}
+\end{align}
+$\Omega_n(q_x,Q_x)$ 是一个非线性边界函数，满足对任意 $(\xi,\omega)\in\E(q_x,Q_x)\times\E(q_w,Q_w)$ 有
+\begin{equation}
+f(\xi,\omega)-f(q_x,q_w)-A(\xi-q_x)-B(\omega-q_w) \in \E(0,\Omega_n(q_x,Q_x)). \label{eq:nonlinear_bounder}
+\end{equation}
+
+\subsection{椭球状态约束}
+椭球 $\E(q_x,Q_x)$ 包含于多面体 $\X$ 当且仅当
+\begin{equation}
+C_i^\top q_x + \sqrt{C_i^\top Q_x C_i} \le c_i,\quad \forall i=1,\dots,n_c. \label{eq:ellipsoid_state_constraint}
+\end{equation}
+
+\subsection{完整的实时椭球管MPC问题}
+在每个采样时刻，给定当前测量 $\hat{x}_0$，求解以下最优控制问题：
+\begin{mini!}{q_x,Q_x,u_x,\lambda,\kappa,K}{\int_0^T \mathcal{L}\big(\E(q_x(\tau),Q_x(\tau))\big)\,d\tau \label{eq:final_ocp}}{}{}
+\addConstraint{\dot{q}_x = f(q_x,q_w) + G u_x,\ \dot{Q}_x = \Phi,\ \forall t\in[0,T]}
+\addConstraint{q_x(0)=\hat{x}_0,\ Q_x(0)=\epsilon I_{n_x}}
+\addConstraint{u_{x,i} \pm \sqrt{K_i Q_x K_i^\top} \le \overline{u}_i,\ \ge \underline{u}_i,\ \forall i}
+\addConstraint{C_i^\top q_x + \sqrt{C_i^\top Q_x C_i} \le c_i,\ \forall i}
+\addConstraint{\lambda(t)>0,\ \kappa(t)>0,\ Q_x(t)\succeq 0}
+\addConstraint{\underline{u} \le u_x(t) \le \overline{u},\ \forall t\in[0,T]}
+\end{mini!}
+代价函数取为广义转动惯量：
+\begin{equation}
+\mathcal{L}\big(\E(q_x,Q_x)\big) = (q_x - x_{\text{ref}})^\top P (q_x - x_{\text{ref}}) + \frac{\Tr(P Q_x)}{n_x+2}. \label{eq:cost}
+\end{equation}
+
+\subsection{显式反馈律}
+由 RFIT 可导出一个显式的边界反馈律 $\mu$，用于下层高速控制回路：
+\begin{equation}
+\mu(\tau,x(\tau)) = 
+\begin{cases}
+u_x(\tau), & \text{if } x(\tau)=q_x(\tau) \\[4pt]
+u_x(\tau) - \dfrac{(K(\tau)Q_x(\tau)K(\tau)^\top) G^\top d(x(\tau))}{\big\| Q_x(\tau)^{\frac12} K(\tau)^\top G^\top d(x(\tau)) \big\|_2}, & \text{otherwise}
+\end{cases} \label{eq:feedback_law}
+\end{equation}
+其中 $d(x(\tau)) = \dfrac{Q_x(\tau)^\dagger (x(\tau)-q_x(\tau))}{\| Q_x(\tau)^\dagger (x(\tau)-q_x(\tau)) \|_2}$，$(\cdot)^\dagger$ 表示 Moore–Penrose 伪逆。
+
+\subsection{实例：10状态四旋翼模型的非线性边界函数}
+对于文中的四旋翼模型（见式(5)），非线性项出现在 $g\tan(x_7)$ 和 $g\tan(x_8)$。Lemma 1 给出了 $\Omega_n$ 的解析构造：
+\begin{equation}
+\Omega_{n_{(i,j)}}(q,Q) = 
+\begin{cases}
+\omega\!\left(q_j,\sqrt{Q_{(j,j)}}\right)^2, & \text{if } (i,j) = (4,7) \text{ or } (5,8) \\
+0, & \text{otherwise}
+\end{cases} \label{eq:omega_quad}
+\end{equation}
+其中
+\begin{equation}
+\omega(q_j,\Delta_j) = \frac{g}{\cos^2(q_j)} \frac{\tan(\Delta_j) - \Delta_j + \Delta_j \tan(|q_j|)\tan(\Delta_j)}{1 - \tan(|q_j|)\tan(\Delta_j)}. \label{eq:omega_def}
+\end{equation}
+
+\subsection{分层控制架构}
+\begin{figure}[h]
+\centering
+\caption{双层控制回路：上层以毫秒级周期求解 Tube MPC 问题，更新反馈律 $\mu$；下层以微秒级周期执行显式反馈律 $\mu$，实现对过程的快速鲁棒控制。}
+\label{fig:hierarchy}
+\end{figure}
+
+\begin{thebibliography}{1}
+\bibitem{Hu2017} H. Hu, X. Feng, R. Quirynen, M. E. Villanueva, and B. Houska, ``Real-Time Tube MPC Applied to a 10-State Quadrotor Model,'' \emph{Submitted to IEEE Conference on Decision and Control}, 2017.
+\end{thebibliography}
+
+\end{document}
